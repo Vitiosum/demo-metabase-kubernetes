@@ -22,7 +22,7 @@ clever k8s create $CLUSTER --nodegroup XS:3 --org $ORG --watch -y
 ## 2. Add-on PostgreSQL (base applicative de Metabase)
 
 ```bash
-clever addon create postgresql-addon metabase-demo-db --plan xxs_sml --region par --org $ORG -y
+clever addon create postgresql-addon metabase-demo-db --plan xxs_sml --option encryption=true --region par --org $ORG -y
 ```
 
 ## 3. Kubeconfig dans un fichier dédié (ne PAS écraser ~/.kube/config)
@@ -33,7 +33,7 @@ export KUBECONFIG=~/.kube/metabase-demo.yaml
 kubectl get nodes          # les 3 nœuds doivent passer Ready
 ```
 
-## 4. Déployer Metabase (Namespace + Deployment + Service LoadBalancer)
+## 4. Déployer Metabase (Namespace + Deployment + Service interne)
 
 ```bash
 kubectl apply -f metabase.yaml
@@ -46,12 +46,21 @@ kubectl apply -f metabase.yaml
 kubectl -n metabase rollout restart deployment/metabase   # le pod a démarré avant le secret
 ```
 
-## 6. Attendre, récupérer l'IP publique, vérifier la santé
+## 6. Attendre, puis créer le compte admin avant d'exposer
+
+Tant que l'assistant de configuration est ouvert, le premier qui joint Metabase crée le compte admin : on le fait en local.
 
 ```bash
 kubectl -n metabase rollout status deployment/metabase --timeout=300s
+kubectl -n metabase port-forward svc/metabase 3000:80     # ouvrir http://localhost:3000, créer le compte, puis Ctrl-C
+```
+
+## 7. Exposer : le Service passe en LoadBalancer, IP publique
+
+```bash
+kubectl -n metabase patch svc metabase -p '{"spec":{"type":"LoadBalancer"}}'
 kubectl -n metabase get svc metabase                      # colonne EXTERNAL-IP
-IP=$(kubectl -n metabase get svc metabase -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+until IP=$(kubectl -n metabase get svc metabase -o jsonpath='{.status.loadBalancer.ingress[0].ip}') && [ -n "$IP" ]; do sleep 5; done
 curl -s http://$IP/api/health                             # {"status":"ok"}
 echo "→ Metabase : http://$IP"
 ```

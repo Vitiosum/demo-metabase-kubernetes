@@ -14,7 +14,7 @@
 |---|---|---|
 | Cluster | `clever k8s create --nodegroup XS:3 --watch`: managed control plane, three XS nodes | The command returns once the cluster is active; upgrades, high availability and hardening of the control plane are not yours |
 | Access | `clever k8s get-kubeconfig` | A standard kubeconfig: `kubectl`, Helm and your CI work as they are, no proprietary CLI for the workloads |
-| Exposure | `Service` of type `LoadBalancer` | A public IP assigned automatically, no ingress controller to install, no IP to reserve (L4, HTTP) |
+| Exposure | `Service` of type `LoadBalancer`, once the admin account exists | A public IP assigned automatically, no ingress controller to install, no IP to reserve (L4, HTTP) |
 | Data | PostgreSQL add-on, plan `xxs_sml`, zone `par` | Metabase's application database outside the cluster, with backups, monitoring and patches handled by the platform, not in an ephemeral pod |
 | Credentials | `clever addon env --format shell`, read by `create-secret.sh` | The `metabase-db` Secret, created without displaying anything |
 
@@ -52,7 +52,7 @@ clever k8s get-kubeconfig $CLUSTER --org $ORG > ~/.kube/metabase-demo.yaml
 export KUBECONFIG=~/.kube/metabase-demo.yaml
 kubectl get nodes                      # the three nodes turn Ready
 
-# 4. Deploy: Namespace, Deployment, Service LoadBalancer
+# 4. Deploy: Namespace, Deployment, internal Service (ClusterIP)
 kubectl apply -f metabase.yaml
 
 # 5. The database Secret, then a restart (the pod started before the Secret existed)
@@ -60,13 +60,18 @@ kubectl apply -f metabase.yaml
 kubectl -n metabase rollout restart deployment/metabase
 kubectl -n metabase rollout status deployment/metabase --timeout=300s
 
-# Public IP and health check
-IP=$(kubectl -n metabase get svc metabase -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+# 6. The admin account, before anyone else can reach Metabase
+kubectl -n metabase port-forward svc/metabase 3000:80
+# open http://localhost:3000, create the admin account, then Ctrl-C
+
+# 7. Expose it: the Service becomes a LoadBalancer and gets a public IP
+kubectl -n metabase patch svc metabase -p '{"spec":{"type":"LoadBalancer"}}'
+until IP=$(kubectl -n metabase get svc metabase -o jsonpath='{.status.loadBalancer.ingress[0].ip}') && [ -n "$IP" ]; do sleep 5; done
 curl -s http://$IP/api/health          # {"status":"ok"}
 echo "Metabase: http://$IP"
 ```
 
-Metabase's first start (migrations of its database) takes 2 to 3 minutes. `create-secret.sh` finds the add-on by name in the `$ORG` organisation, so there is no ID to copy and paste.
+Metabase's first start (migrations of its database) takes 2 to 3 minutes. It then opens on its setup wizard, and whoever reaches it first creates the admin account: that is why the Service starts internal and the account is created through `kubectl port-forward` before step 7 gives it a public IP. `create-secret.sh` finds the add-on by name in the `$ORG` organisation, so there is no ID to copy and paste.
 
 **Clean up**
 
@@ -95,7 +100,7 @@ After a deletion, wait 2 to 3 minutes for the vCPU and LoadBalancer quota to be 
 
 | File | Role |
 |---|---|
-| [`metabase.yaml`](metabase.yaml) | Namespace, Deployment (pinned image `metabase/metabase:v0.50.30`, 1 replica, requests 500m CPU and 1 Gi, limit 2 Gi, probes on `/api/health`) and LoadBalancer Service (80 → 3000) |
+| [`metabase.yaml`](metabase.yaml) | Namespace, Deployment (pinned image `metabase/metabase:v0.50.30`, 1 replica, requests 500m CPU and 1 Gi, limit 2 Gi, probes on `/api/health`) and a Service (80 → 3000), internal until step 7 makes it a LoadBalancer |
 | [`create-secret.sh`](create-secret.sh) | Creates the `metabase-db` Secret from the add-on's credentials (prints nothing) |
 | [`DEMO.md`](DEMO.md) | The commands, block by block, in the order of the recording (French) |
 | [`SCRIPT-VIDEO.md`](SCRIPT-VIDEO.md) | The voice-over of the video (French) |

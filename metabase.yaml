@@ -57,7 +57,10 @@ metadata:
   name: metabase
   namespace: metabase
 spec:
-  type: LoadBalancer
+  # Internal at first: Metabase opens on its setup wizard, and whoever reaches it
+  # first creates the admin account. Finish the setup through kubectl port-forward,
+  # then expose it as a LoadBalancer (README, steps 6 and 7).
+  type: ClusterIP
   selector:
     app: metabase
   ports:
